@@ -75,14 +75,15 @@ def one_die_leaves(faces: int, reroll: FrozenSet[int]) -> List[Tuple[int, Fracti
         if first in reroll:
             # First face is rerolled: p(first)=1/F, p(second)=1/F.
             for second in range(1, faces + 1):
-                if first == faces:
+                if second == faces:
                     # Final face is F: add a non-chaining bonus dF.
+                    # Three independent rolls (first, second, bonus) -> 1/F^3.
                     for bonus in range(1, faces + 1):
-                        leaves.append((faces + bonus, Fraction(1, faces**2)))
+                        leaves.append((faces + bonus, Fraction(1, faces**3)))
                 else:
                     leaves.append((second, Fraction(1, faces**2)))
         elif first == faces:
-            # First face F kept: add the bonus dF.
+            # First face F kept: add the bonus dF. Two rolls -> 1/F^2.
             for bonus in range(1, faces + 1):
                 leaves.append((faces + bonus, Fraction(1, faces**2)))
         else:
@@ -106,7 +107,8 @@ def _merge_topk(state: Tuple[int, ...], value: int, keep: int) -> Tuple[int, ...
         return tuple(sorted(state + (value,)))
     if value <= state[0]:
         return state
-    return tuple(sorted(state[:-1] + (value,)))
+    # Drop the current smallest (state[0]); value and the other K-1 stay.
+    return tuple(sorted(state[1:] + (value,)))
 
 
 def top_k_distribution(
@@ -125,7 +127,7 @@ def top_k_distribution(
 
     # state -> probability; start with no dice seen
     states: Dict[Tuple[int, ...], Fraction] = {(): Fraction(1)}
-    for _ in range(max(1, n_dice - 1)):
+    for _ in range(n_dice):
         nxt: Dict[Tuple[int, ...], Fraction] = {}
         for state, state_p in states.items():
             for value, value_p in single.items():
@@ -179,6 +181,6 @@ def expected_score(distribution: Dict[int, Fraction]) -> Fraction:
 def probability_at_least(distribution: Dict[int, Fraction], threshold: int) -> Fraction:
     """Exact tail probability P(total >= threshold)."""
     return sum(
-        (p for score, p in distribution.items() if score > threshold),
+        (p for score, p in distribution.items() if score >= threshold),
         Fraction(0),
     )

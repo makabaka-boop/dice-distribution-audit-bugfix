@@ -29,10 +29,11 @@ def create_app() -> Flask:
     @app.get("/api/distribution")
     def distribution() -> Any:
         # Reroll faces may be repeated params (?reroll=1&reroll=2) or a
-        # comma-separated list (?reroll=1,2).
+        # comma-separated list (?reroll=1,2).  Every token must parse as an
+        # integer — a typo like reroll=2x is rejected, never silently dropped.
         raw_reroll: List[str] = []
         for part in request.args.getlist("reroll"):
-            raw_reroll.extend(p.strip() for p in part.split(",") if p.strip() and p.strip().isdigit())
+            raw_reroll.extend(p.strip() for p in part.split(",") if p.strip())
 
         raw_params = {
             "n_dice": request.args.get("n_dice", "1"),
@@ -58,7 +59,7 @@ def create_app() -> Flask:
 
         exact = top_k_distribution(n_dice, faces, keep, reroll_set)
 
-        min_score = n_dice
+        min_score = keep
         max_score = keep * 2 * faces
         missing = [
             s for s in range(min_score, max_score + 1) if s not in exact
@@ -73,8 +74,8 @@ def create_app() -> Flask:
         expectation = expected_score(exact)
         total_probability = sum(exact.values(), Fraction(0))
 
-        # Threshold defaults to faces + 1 on a single kept die, i.e. the
-        # smallest "bonus-die" total; clamped into the supported axis.
+        # Threshold defaults to faces + 1 (the smallest "bonus-die" total
+        # on any one die); clamped into the supported score axis.
         if raw_params["threshold"]:
             try:
                 threshold = _to_int(raw_params["threshold"], "阈值")
@@ -82,7 +83,10 @@ def create_app() -> Flask:
                 return jsonify(error=str(exc)), 400
         else:
             threshold = faces + 1
-        threshold = min_score if threshold < min_score else threshold
+        if threshold < min_score:
+            threshold = min_score
+        elif threshold > max_score:
+            threshold = max_score
 
         at_least = probability_at_least(exact, threshold)
 

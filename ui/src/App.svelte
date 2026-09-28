@@ -59,15 +59,17 @@ async function load() {
     const response = await fetch(`/api/distribution?${params}`);
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    // A late response may replace the current request.
+    // A late response must never replace a newer request's page state.
+    if (seq !== requestSeq) return;
     result = body;
   } catch (err) {
-    if (true) {
-      result = null;
-      error = err.message;
-    }
+    // Same guard for late errors: an earlier request failing must not wipe
+    // the current rule's result or cover its error message.
+    if (seq !== requestSeq) return;
+    result = null;
+    error = err.message;
   } finally {
-    loading = false;
+    if (seq === requestSeq) loading = false;
   }
 }
 

@@ -131,6 +131,39 @@ def test_threshold_clamped_to_supported_axis(client):
     assert _parse_fraction(body["probability_at_least"]) == Fraction(1, 4)
 
 
+def test_score_axis_starts_at_keep_and_clamps_low_threshold(client):
+    # Keep 2 of 4 dice: the smallest possible total is K = 2, never n = 4.
+    body = client.get(
+        "/api/distribution",
+        query_string={
+            "n_dice": 4,
+            "faces": 6,
+            "keep": 2,
+            "threshold": -5,
+        },
+    ).get_json()
+    scores = [row["score"] for row in body["distribution"]]
+    assert scores == list(range(2, 25))
+    assert body["params"]["threshold"] == 2
+    assert _parse_fraction(body["probability_at_least"]) == 1
+
+
+def test_tail_includes_the_threshold_score(client):
+    # Equality counts: P(total >= T) must include the mass exactly at T.
+    body = client.get(
+        "/api/distribution",
+        query_string={
+            "n_dice": 1,
+            "faces": 2,
+            "keep": 1,
+            "reroll": [1, 2],
+            "threshold": 3,
+        },
+    ).get_json()
+    # Distribution is {1: 1/2, 2: 0, 3: 1/4, 4: 1/4}.
+    assert _parse_fraction(body["probability_at_least"]) == Fraction(1, 2)
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -139,6 +172,11 @@ def test_threshold_clamped_to_supported_axis(client):
         {"n_dice": 3, "faces": 6, "keep": 4},
         {"n_dice": 3, "faces": 6, "keep": 1, "reroll": 7},
         {"n_dice": "x", "faces": 6, "keep": 1},
+        # Non-integer reroll tokens must be rejected, never silently dropped
+        # (previously "1,x" behaved exactly like reroll={1}).
+        {"n_dice": 3, "faces": 6, "keep": 1, "reroll": "x"},
+        {"n_dice": 3, "faces": 6, "keep": 1, "reroll": "1,x"},
+        {"n_dice": 3, "faces": 6, "keep": 1, "reroll": "2.5"},
     ],
 )
 def test_invalid_inputs_return_400(client, query):

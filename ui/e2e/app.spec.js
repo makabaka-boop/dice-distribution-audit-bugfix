@@ -166,3 +166,118 @@ test('UI requests the odds service over real HTTP through the UI origin', async 
   for (const row of body.distribution) total = add(total, parseFraction(row.probability));
   expect(total).toEqual([1n, 1n]);
 });
+
+test('a slow earlier response never overwrites the newest rule result', async ({ page, request }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('summary')).toBeVisible();
+
+  // Capture the two real responses up front (APIRequestContext is not
+  // affected by page.route), so they can later be delivered out of order.
+  const urlFor = (threshold) =>
+    `/api/distribution?n_dice=3&faces=6&keep=2&threshold=${threshold}&reroll=1`;
+  const [res10, res11] = await Promise.all([
+    request.get(urlFor('10')),
+    request.get(urlFor('11'))
+  ]);
+  const body10 = await res10.text();
+  const body11 = await res11.text();
+  expect(body10).not.toBe(body11);
+
+  // Gate every distribution request by its threshold; matched responses are
+  // fulfilled locally and held until the test releases them.
+  const gates = new Map();
+  await page.route(/\/api\/distribution\?/, async (route) => {
+    const threshold = new URL(route.request().url()).searchParams.get('threshold');
+    if (gates.has(threshold)) {
+      await gates.get(threshold);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: threshold === '10' ? body10 : body11
+      });
+    }
+    await route.continue();
+  });
+
+  let releaseTen;
+  gates.set('10', new Promise((resolve) => (releaseTen = resolve)));
+  let releaseEleven;
+  gates.set('11', new Promise((resolve) => (releaseEleven = resolve)));
+
+  // Arm each waiter BEFORE the interaction, and don't change the rule again
+  // until the first request is confirmed in flight.
+  const waitTen = page.waitForRequest((r) => r.url().includes('threshold=10'));
+  await page.getByTestId('input-threshold').fill('10');
+  await waitTen;
+  const waitEleven = page.waitForRequest((r) => r.url().includes('threshold=11'));
+  await page.getByTestId('input-threshold').fill('11');
+  await waitEleven;
+
+  // NEWEST response arrives first; the older threshold=10 response last.
+  releaseEleven();
+  await expect(page.getByText('P(总分 ≥ 11)')).toBeVisible();
+  const newestTail = await page.getByTestId('tail-probability').textContent();
+  releaseTen();
+
+  // The stale threshold=10 response must be ignored, not painted.
+  await page.waitForTimeout(200);
+  expect(await page.getByTestId('tail-probability').textContent()).toBe(newestTail);
+  await expect(page.getByText('P(总分 ≥ 10)')).toHaveCount(0);
+});
+
+test('a late error from an earlier request never wipes the current result', async ({ page, request }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('summary')).toBeVisible();
+
+  // A real success body for the newest rule (threshold 12).
+  const res12 = await request.get(
+    '/api/distribution?n_dice=3&faces=6&keep=2&threshold=12&reroll=1'
+  );
+  const body12 = await res12.text();
+
+  const gates = new Map();
+  await page.route(/\/api\/distribution\?/, async (route) => {
+    const threshold = new URL(route.request().url()).searchParams.get('threshold');
+    if (threshold === '10') {
+      await gates.get('10');
+      return route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: '迟到的错误' })
+      });
+    }
+    if (threshold === '12') {
+      await gates.get('12');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: body12
+      });
+    }
+    await route.continue();
+  });
+
+  let releaseTen;
+  gates.set('10', new Promise((resolve) => (releaseTen = resolve)));
+  let releaseTwelve;
+  gates.set('12', new Promise((resolve) => (releaseTwelve = resolve)));
+
+  const waitTen = page.waitForRequest((r) => r.url().includes('threshold=10'));
+  await page.getByTestId('input-threshold').fill('10');
+  await waitTen;
+  const waitTwelve = page.waitForRequest((r) => r.url().includes('threshold=12'));
+  await page.getByTestId('input-threshold').fill('12');
+  await waitTwelve;
+
+  // The newest request succeeds first.
+  releaseTwelve();
+  await expect(page.getByText('P(总分 ≥ 12)')).toBeVisible();
+  const newestTail = await page.getByTestId('tail-probability').textContent();
+
+  // The older request then fails; its late error must not replace the page.
+  releaseTen();
+  await page.waitForTimeout(200);
+  await expect(page.getByTestId('error')).toHaveCount(0);
+  expect(await page.getByTestId('tail-probability').textContent()).toBe(newestTail);
+});
+
