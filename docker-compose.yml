@@ -1,0 +1,18 @@
+services:
+  odds:
+    build:
+      context: ./odds
+    container_name: dice-odds
+    expose:
+      - "5000"
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./ui
+    container_name: dice-ui
+    ports:
+      - "8080:80"
+    depends_on:
+      - odds
+    restart: unless-stopped
