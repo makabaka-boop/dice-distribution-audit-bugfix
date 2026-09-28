@@ -29,10 +29,14 @@ def create_app() -> Flask:
     @app.get("/api/distribution")
     def distribution() -> Any:
         # Reroll faces may be repeated params (?reroll=1&reroll=2) or a
-        # comma-separated list (?reroll=1,2).
+        # comma-separated list (?reroll=1,2).  A wholly empty/whitespace
+        # parameter contributes no faces; a gap inside a list (e.g. "1,,2")
+        # is a malformed token and is rejected below, never silently dropped.
         raw_reroll: List[str] = []
         for part in request.args.getlist("reroll"):
-            raw_reroll.extend(p.strip() for p in part.split(",") if p.strip() and p.strip().isdigit())
+            if not part.strip():
+                continue
+            raw_reroll.extend(piece.strip() for piece in part.split(","))
 
         raw_params = {
             "n_dice": request.args.get("n_dice", "1"),
@@ -58,7 +62,7 @@ def create_app() -> Flask:
 
         exact = top_k_distribution(n_dice, faces, keep, reroll_set)
 
-        min_score = n_dice
+        min_score = keep
         max_score = keep * 2 * faces
         missing = [
             s for s in range(min_score, max_score + 1) if s not in exact
@@ -82,7 +86,7 @@ def create_app() -> Flask:
                 return jsonify(error=str(exc)), 400
         else:
             threshold = faces + 1
-        threshold = min_score if threshold < min_score else threshold
+        threshold = max(min_score, min(max_score, threshold))
 
         at_least = probability_at_least(exact, threshold)
 

@@ -158,3 +158,84 @@ def test_minimal_rule_two_sided(client):
     assert rows[2] == Fraction(0)
     assert rows[3] == Fraction(1, 4)
     assert rows[4] == Fraction(1, 4)
+
+
+def test_score_axis_starts_at_keep_not_n_dice(client):
+    # Regression: the minimum total is the sum of the K smallest possible
+    # kept values = keep, regardless of how many dice were rolled.
+    body = client.get(
+        "/api/distribution",
+        query_string={"n_dice": 4, "faces": 6, "keep": 2},
+    ).get_json()
+    rows = body["distribution"]
+    assert rows[0]["score"] == 2
+    assert rows[-1]["score"] == 2 * 2 * 6
+    assert [row["score"] for row in rows] == list(range(2, 25))
+
+
+def test_tail_includes_scores_equal_to_threshold(client):
+    # Regression: P(total >= threshold) includes score == threshold.
+    body = client.get(
+        "/api/distribution",
+        query_string={"n_dice": 1, "faces": 2, "keep": 1, "threshold": 3},
+    ).get_json()
+    rows = body["distribution"]
+    direct = sum(
+        (
+            _parse_fraction(row["probability"])
+            for row in rows
+            if row["score"] >= 3
+        ),
+        Fraction(0),
+    )
+    assert direct == Fraction(1, 2)
+    assert _parse_fraction(body["probability_at_least"]) == direct
+
+
+def test_threshold_clamped_from_above(client):
+    # Regression: an over-large threshold must be clamped onto the axis, not
+    # left beyond it (which would wrongly report a tail of 0).
+    body = client.get(
+        "/api/distribution",
+        query_string={"n_dice": 1, "faces": 2, "keep": 1, "threshold": -5},
+    ).get_json()
+    assert body["params"]["threshold"] == 1
+    assert _parse_fraction(body["probability_at_least"]) == 1
+
+
+@pytest.mark.parametrize("reroll", ["x", "1,x", "1,,2", "-1", "1.5", " 3 ,"])
+def test_malformed_reroll_tokens_rejected(client, reroll):
+    # Regression: non-integer reroll tokens must surface as 400 instead of
+    # being filtered out and silently ignored.
+    response = client.get(
+        "/api/distribution",
+        query_string={"n_dice": 3, "faces": 6, "keep": 1, "reroll": reroll},
+    )
+    assert response.status_code == 400
+    assert "重掷面" in response.get_json()["error"]
+
+
+def test_empty_reroll_parameter_is_no_reroll_faces(client):
+    # A bare ?reroll= carries no faces at all (distinct from a malformed
+    # token embedded in a non-empty list).
+    body = client.get(
+        "/api/distribution",
+        query_string={"n_dice": 2, "faces": 6, "keep": 1, "reroll": ""},
+    ).get_json()
+    assert body["params"]["reroll"] == []
+
+
+def test_reroll_max_face_route_consistency(client):
+    # The HTTP path must return a partition of 1 with the corrected
+    # reroll/F-bonus weights.
+    body = client.get(
+        "/api/distribution",
+        query_string={"n_dice": 1, "faces": 6, "keep": 1, "reroll": 6},
+    ).get_json()
+    rows = {row["score"]: _parse_fraction(row["probability"]) for row in body["distribution"]}
+    assert sum(rows.values(), Fraction(0)) == 1
+    assert rows[6] == 0
+    for score in range(1, 6):
+        assert rows[score] == Fraction(7, 36)
+    for score in range(7, 13):
+        assert rows[score] == Fraction(1, 216)

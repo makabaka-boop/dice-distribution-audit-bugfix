@@ -173,3 +173,69 @@ def test_reroll_deduplicated():
     _, _, _, reroll = validate_params(2, 6, 1, [1, 1, 6])
     assert reroll == frozenset({1, 6})
     assert MAX_DICE == 6 and MAX_FACES == 8
+
+
+def test_reroll_max_face_uses_second_face_for_bonus():
+    # Regression: rerolling the maximum face F must branch the bonus die on
+    # the *second* (final) face, not on the first.  With reroll={F} the first
+    # roll is consumed: second faces 1..F-1 land at 1/F**2 each and only
+    # second=F triggers the bonus (1/F**3 leaves); the path probabilities
+    # still partition exactly 1.
+    dist = one_die_distribution(6, frozenset({6}))
+    assert sum(dist.values(), Fraction(0)) == 1
+    for value in range(1, 6):
+        assert dist[value] == Fraction(1, 6) + Fraction(1, 36)
+    for value in range(7, 13):
+        assert dist[value] == Fraction(1, 216)
+    assert dist.get(6, 0) == 0
+
+
+def test_rerolled_low_face_can_become_max_with_bonus():
+    # Regression: first=1 rerolled to second=F must STILL trigger the bonus,
+    # and value F itself stays impossible regardless of the reroll set.
+    dist = one_die_distribution(6, frozenset({1}))
+    assert sum(dist.values(), Fraction(0)) == 1
+    assert dist.get(6, 0) == 0
+    # P(value 7): first=6 kept,bonus=1 (1/36) or first=1,second=6,bonus=1 (1/216)
+    assert dist[7] == Fraction(7, 216)
+
+
+def test_single_die_distribution_keeps_all_dice_in_dp():
+    # Regression: top_k_distribution must fold in all n dice.  With n=1 it
+    # must return the single-die distribution, not an empty one.
+    for faces in range(2, 9):
+        assert top_k_distribution(1, faces, 1, frozenset({1, faces})) == \
+            one_die_distribution(faces, frozenset({1, faces}))
+
+
+def test_keep_two_of_three_drops_only_the_lowest():
+    # Regression: with a full K-tuple the merge must evict state[0] (the
+    # smallest kept value), not state[-1] (the largest).  A state[-1] merge
+    # would leak low values into the kept sum; e.g. rolls (4, 3, 1) sum to 7
+    # keeping the top two, and must never contribute to score 5.
+    fast = top_k_distribution(3, 2, 2, frozenset())
+    brute = enumerate_distribution(3, 2, 2, frozenset())
+    assert fast == brute
+    assert fast[7] > 0
+
+
+def test_top_k_all_keep_counts_every_die():
+    # keep = n: the sum must cover every die; n=2 d2 no-reroll has a 2-die
+    # support reaching 8 and a known mass at score 8 of (1/4)^2 = 1/16.
+    dist = top_k_distribution(2, 2, 2, frozenset())
+    assert dist == {
+        2: Fraction(1, 4),
+        4: Fraction(1, 4),
+        5: Fraction(1, 4),
+        6: Fraction(1, 16),
+        7: Fraction(1, 8),
+        8: Fraction(1, 16),
+    }
+
+
+def test_tail_probability_includes_threshold():
+    # Regression: P(total >= T) must include scores equal to T.
+    dist = top_k_distribution(1, 2, 1, frozenset())  # {1:1/2, 3:1/4, 4:1/4}
+    assert probability_at_least(dist, 4) == Fraction(1, 4)
+    assert probability_at_least(dist, 3) == Fraction(1, 2)
+    assert probability_at_least(dist, 2) == Fraction(1, 2)

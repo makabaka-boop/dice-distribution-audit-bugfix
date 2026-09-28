@@ -73,12 +73,15 @@ def one_die_leaves(faces: int, reroll: FrozenSet[int]) -> List[Tuple[int, Fracti
     leaves: List[Tuple[int, Fraction]] = []
     for first in range(1, faces + 1):
         if first in reroll:
-            # First face is rerolled: p(first)=1/F, p(second)=1/F.
+            # First face is rerolled: p(first)=1/F, p(second)=1/F.  Whether
+            # the bonus die is rolled depends on the *final* (second) face,
+            # not on the first face that triggered the reroll.
             for second in range(1, faces + 1):
-                if first == faces:
-                    # Final face is F: add a non-chaining bonus dF.
+                if second == faces:
+                    # Final face is F: three random rolls (first, second,
+                    # non-chaining bonus), each leaf has p = 1/F**3.
                     for bonus in range(1, faces + 1):
-                        leaves.append((faces + bonus, Fraction(1, faces**2)))
+                        leaves.append((faces + bonus, Fraction(1, faces**3)))
                 else:
                     leaves.append((second, Fraction(1, faces**2)))
         elif first == faces:
@@ -104,9 +107,11 @@ def _merge_topk(state: Tuple[int, ...], value: int, keep: int) -> Tuple[int, ...
     """Insert ``value`` into an ascending tuple, keeping only the K largest."""
     if len(state) < keep:
         return tuple(sorted(state + (value,)))
+    # State is ascending, so state[0] is the current smallest kept value.
+    # Drop it when the incoming value is larger; ties are kept as-is.
     if value <= state[0]:
         return state
-    return tuple(sorted(state[:-1] + (value,)))
+    return tuple(sorted(state[1:] + (value,)))
 
 
 def top_k_distribution(
@@ -123,9 +128,9 @@ def top_k_distribution(
     """
     single = one_die_distribution(faces, reroll)
 
-    # state -> probability; start with no dice seen
+    # state -> probability; start with no dice seen, then fold in each die.
     states: Dict[Tuple[int, ...], Fraction] = {(): Fraction(1)}
-    for _ in range(max(1, n_dice - 1)):
+    for _ in range(n_dice):
         nxt: Dict[Tuple[int, ...], Fraction] = {}
         for state, state_p in states.items():
             for value, value_p in single.items():
@@ -179,6 +184,6 @@ def expected_score(distribution: Dict[int, Fraction]) -> Fraction:
 def probability_at_least(distribution: Dict[int, Fraction], threshold: int) -> Fraction:
     """Exact tail probability P(total >= threshold)."""
     return sum(
-        (p for score, p in distribution.items() if score > threshold),
+        (p for score, p in distribution.items() if score >= threshold),
         Fraction(0),
     )

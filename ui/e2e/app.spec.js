@@ -166,3 +166,60 @@ test('UI requests the odds service over real HTTP through the UI origin', async 
   for (const row of body.distribution) total = add(total, parseFraction(row.probability));
   expect(total).toEqual([1n, 1n]);
 });
+
+test('a slow earlier response cannot overwrite a newer rule result', async ({ page }) => {
+  // Hold any faces=2 response until the test releases it, so a later
+  // faces=3 request resolves first while the faces=2 one is still in flight.
+  let releaseStale = () => {};
+  const staleGate = new Promise((resolve) => (releaseStale = resolve));
+  await page.route('**/api/distribution**', async (route) => {
+    if (route.request().url().includes('faces=2')) {
+      const response = await route.fetch();
+      await staleGate;
+      await route.fulfill({ response });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('summary')).toBeVisible();
+
+  // Switch to faces=2: that request gets held open by the route gate.
+  const faces2Requested = page.waitForRequest((r) =>
+    r.url().includes('/api/distribution') && r.url().includes('faces=2')
+  );
+  await page.getByTestId('input-faces').selectOption('2');
+  await faces2Requested;
+
+  // Immediately switch to faces=3; this response arrives first.
+  const faces3Promise = page.waitForResponse(
+    (r) => r.url().includes('/api/distribution') && r.url().includes('faces=3')
+  );
+  await page.getByTestId('input-faces').selectOption('3');
+  const faces3Body = await (await faces3Promise).json();
+  expect(faces3Body.params.faces).toBe(3);
+
+  // The settled page renders the faces=3 result while faces=2 is pending.
+  await expect(page.getByTestId('bar-row')).toHaveCount(
+    faces3Body.distribution.length
+  );
+  await expect(page.getByTestId('total-probability')).toHaveText(
+    faces3Body.total_probability
+  );
+
+  // Release the stale faces=2 response and let it land.
+  releaseStale();
+  await page.waitForTimeout(500);
+
+  // The page must still show faces=3: stale data (and only 2 reroll chips)
+  // must not overwrite the current rule.
+  await expect(page.getByTestId('input-faces')).toHaveValue('3');
+  await expect(page.getByTestId('reroll-chip')).toHaveCount(3);
+  await expect(page.getByTestId('bar-row')).toHaveCount(
+    faces3Body.distribution.length
+  );
+  await expect(page.getByTestId('total-probability')).toHaveText(
+    faces3Body.total_probability
+  );
+});

@@ -73,7 +73,7 @@ cd ui && npm install && npm run dev  # http://localhost:5173
 期望、尾部、参数校验及 HTTP 层（含 400 与分数/浮点一致性）。
 
 ```bash
-python3 -m pytest     # 471 passed
+python3 -m pytest     # 488 passed
 ```
 
 ### 2. 浏览器主流程（Playwright）
@@ -90,7 +90,7 @@ UI 源（经其代理到 odds），核对：
 cd ui
 npm install
 npx playwright install chromium
-npm run test:e2e      # 5 passed
+npm run test:e2e      # 6 passed
 ```
 
 ## 设计要点

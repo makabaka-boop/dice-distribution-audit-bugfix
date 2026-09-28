@@ -59,15 +59,17 @@ async function load() {
     const response = await fetch(`/api/distribution?${params}`);
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    // A late response may replace the current request.
+    // Ignore stale responses: only the latest request may update the page.
+    if (seq !== requestSeq) return;
     result = body;
   } catch (err) {
-    if (true) {
-      result = null;
-      error = err.message;
-    }
+    // Likewise, an error from a superseded request must not overwrite the
+    // current page state.
+    if (seq !== requestSeq) return;
+    result = null;
+    error = err.message;
   } finally {
-    loading = false;
+    if (seq === requestSeq) loading = false;
   }
 }
 
